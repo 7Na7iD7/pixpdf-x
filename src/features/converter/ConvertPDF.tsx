@@ -66,7 +66,6 @@ export function ConvertPDF() {
     let outputPath: string | null;
 
     if (isImageExport) {
-      // Backend writes one image per page into this directory.
       outputPath = await pickFolder();
     } else {
       const ext = targetFormat === "pdfa" ? "pdf" : targetFormat;

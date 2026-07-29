@@ -75,8 +75,6 @@ export function Security() {
         action: mode === "encrypt" ? "Encrypted" : "Decrypted",
       });
     } catch (err) {
-      // Backend currently returns PDFError::NotImplemented for both — surface
-      // that honestly instead of pretending it worked.
       addToast({
         title: mode === "encrypt" ? "Encryption unavailable" : "Decryption unavailable",
         description: pdfErrorMessage(err),

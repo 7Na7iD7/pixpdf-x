@@ -12,8 +12,7 @@ pub struct FileInfo {
     pub extension: Option<String>,
 }
 
-/// Opens a native "open file" dialog restricted to PDFs and returns the chosen path.
-/// Returns Ok(None) if the user cancels — this is NOT an error.
+
 #[command]
 pub async fn pick_file(app: AppHandle) -> Result<Option<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -29,7 +28,6 @@ pub async fn pick_file(app: AppHandle) -> Result<Option<String>, String> {
     rx.await.map_err(|e| e.to_string())
 }
 
-/// Opens a native "open file" dialog allowing multiple PDF selection (used by Merge).
 #[command]
 pub async fn pick_files(app: AppHandle) -> Result<Vec<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -49,7 +47,6 @@ pub async fn pick_files(app: AppHandle) -> Result<Vec<String>, String> {
     rx.await.map_err(|e| e.to_string())
 }
 
-/// Opens a native "save file" dialog and returns the chosen destination path.
 #[command]
 pub async fn pick_save_path(app: AppHandle, default_name: String) -> Result<Option<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();

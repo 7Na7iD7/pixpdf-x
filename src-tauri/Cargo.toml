@@ -4,7 +4,7 @@ version = "1.0.0"
 description = "PixPDF X - Next Generation PDF Studio by NAVIKI Labs"
 authors = ["NAVIKI Labs"]
 license = "Proprietary"
-edition = "2021"
+edition = "2026"
 rust-version = "1.75"
 
 [build-dependencies]

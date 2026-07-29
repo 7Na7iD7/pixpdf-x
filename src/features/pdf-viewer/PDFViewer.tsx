@@ -77,7 +77,6 @@ export function PDFViewer() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentDocument?.path, currentPage, zoom]);
 
   if (!currentDocument) {

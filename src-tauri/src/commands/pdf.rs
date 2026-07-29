@@ -37,7 +37,6 @@ pub struct PDFPageInfo {
     pub height: f64,
 }
 
-// ---------- open / metadata / pages ----------
 
 #[command]
 pub async fn open_pdf(path: String) -> Result<PDFDocumentInfo, PDFError> {
@@ -106,7 +105,6 @@ fn get_page_dimensions(doc: &Document, object_id: ObjectId) -> Option<(f64, f64)
         .and_then(|o| o.as_array())
         .ok()
         .or_else(|| {
-            // MediaBox can be inherited from a parent Pages node
             let mut current = dict.get(b"Parent").and_then(|o| o.as_reference()).ok();
             while let Some(parent_id) = current {
                 if let Ok(parent_dict) = doc.get_dictionary(parent_id) {
@@ -131,11 +129,6 @@ fn get_page_dimensions(doc: &Document, object_id: ObjectId) -> Option<(f64, f64)
     None
 }
 
-// ---------- rendering ----------
-// NOTE: lopdf cannot rasterize pages. Real rendering requires pdfium-render
-// (bundled pdfium binary) or poppler. Wire that in when the binary is available;
-// for now this returns a clear error instead of a fake base64 string so the
-// frontend can show "rendering unavailable" instead of a broken <img>.
 
 #[command]
 pub async fn render_page(path: String, page_index: u32, scale: f32) -> Result<String, PDFError> {
@@ -163,8 +156,6 @@ fn base64_encode(data: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(data)
 }
-
-// ---------- merge ----------
 
 #[command]
 pub async fn merge_pdfs(paths: Vec<String>, output_path: String) -> Result<String, PDFError> {
@@ -274,12 +265,10 @@ pub async fn merge_pdfs(paths: Vec<String>, output_path: String) -> Result<Strin
     Ok(output_path)
 }
 
-// ---------- split ----------
-
 #[derive(Deserialize)]
 pub struct PageRange {
-    pub start: u32, // 1-indexed, inclusive
-    pub end: u32,   // 1-indexed, inclusive
+    pub start: u32,
+    pub end: u32,
 }
 
 #[command]
@@ -302,7 +291,6 @@ pub async fn split_pdf(
             )));
         }
 
-        // Reload a fresh copy per range and delete every page NOT in range.
         let mut doc = Document::load(&path).map_err(PDFError::from)?;
         let pages = doc.get_pages();
         let to_delete: Vec<u32> = pages
@@ -322,7 +310,6 @@ pub async fn split_pdf(
     Ok(output_paths)
 }
 
-// ---------- rotate ----------
 
 #[command]
 pub async fn rotate_pages(
@@ -357,7 +344,6 @@ pub async fn rotate_pages(
     Ok(output_path)
 }
 
-// ---------- delete pages ----------
 
 #[command]
 pub async fn delete_pages(
@@ -388,7 +374,6 @@ pub async fn delete_pages(
     Ok(output_path)
 }
 
-// ---------- metadata helpers ----------
 
 fn extract_metadata(doc: &Document) -> PDFMetadata {
     let mut metadata = PDFMetadata {
@@ -422,7 +407,6 @@ fn extract_metadata(doc: &Document) -> PDFMetadata {
 fn get_string_from_dict(dict: &lopdf::Dictionary, key: &str) -> Option<String> {
     dict.get(key.as_bytes()).ok().and_then(|obj| match obj {
         Object::String(bytes, _) => {
-            // Try UTF-16BE (common for PDF text strings with a BOM) then fall back to UTF-8/Latin-1.
             if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
                 let utf16: Vec<u16> = bytes[2..]
                     .chunks_exact(2)

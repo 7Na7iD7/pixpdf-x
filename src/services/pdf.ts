@@ -1,8 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { PDFDocument, PDFMetadata, PDFPage } from "@apptypes/index";
 
-// ---------- native file dialogs (replace the broken (file as any).path pattern) ----------
-
 export async function pickFile(): Promise<string | null> {
   return invoke("pick_file");
 }
@@ -19,7 +17,6 @@ export async function pickFolder(): Promise<string | null> {
   return invoke("pick_folder");
 }
 
-// ---------- PDF operations ----------
 
 export async function openPDF(path: string): Promise<PDFDocument> {
   const info = await invoke<any>("open_pdf", { path });
@@ -55,11 +52,6 @@ export async function getPDFPages(path: string): Promise<PDFPage[]> {
   return pages.map((p) => ({ index: p.index, width: p.width, height: p.height }));
 }
 
-/**
- * Renders a page to a base64 PNG data URL. Throws if the pdfium rendering
- * backend isn't wired up server-side yet — callers should catch this and
- * show a "preview unavailable" placeholder instead of crashing.
- */
 export async function renderPage(
   path: string,
   pageIndex: number,
@@ -136,7 +128,6 @@ export async function deletePages(
   return invoke("delete_pages", { path, outputPath, pages });
 }
 
-/** Human-readable error extraction — Tauri command errors arrive as plain strings/objects. */
 export function pdfErrorMessage(err: unknown): string {
   if (typeof err === "string") return err;
   if (err && typeof err === "object") {

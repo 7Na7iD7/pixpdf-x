@@ -27,7 +27,6 @@ export function TopToolbar() {
       animate={{ y: 0, opacity: 1 }}
       className="flex items-center h-14 px-4 bg-card/50 backdrop-blur-xl border-b border-border shrink-0 gap-1"
     >
-      {/* File Operations */}
       <div className="flex items-center gap-1">
         <ToolbarButton icon={FolderOpen} label="Open" shortcut="Ctrl+O" />
         <ToolbarButton icon={Save} label="Save" shortcut="Ctrl+S" disabled={!currentDocument} />
@@ -37,14 +36,12 @@ export function TopToolbar() {
 
       <Separator orientation="vertical" className="h-6 mx-2" />
 
-      {/* Search */}
       <div className="flex items-center gap-1">
         <ToolbarButton icon={Search} label="Search" shortcut="Ctrl+F" />
       </div>
 
       <Separator orientation="vertical" className="h-6 mx-2" />
 
-      {/* Zoom & Navigation */}
       <div className="flex items-center gap-1">
         <ToolbarButton icon={ZoomOut} label="Zoom Out" />
         <span className="text-xs text-muted-foreground w-12 text-center font-mono">
@@ -55,7 +52,6 @@ export function TopToolbar() {
 
       <Separator orientation="vertical" className="h-6 mx-2" />
 
-      {/* Page Navigation */}
       <div className="flex items-center gap-1">
         <ToolbarButton icon={ChevronLeft} label="Previous" />
         <span className="text-xs text-muted-foreground px-2 font-mono">
@@ -66,14 +62,12 @@ export function TopToolbar() {
 
       <div className="flex-1" />
 
-      {/* Export Actions */}
       <div className="flex items-center gap-1">
         <ToolbarButton icon={Printer} label="Print" />
         <ToolbarButton icon={Download} label="Export" />
         <ToolbarButton icon={RotateCcw} label="Reset View" />
       </div>
 
-      {/* Loading Indicator */}
       {isLoading && (
         <motion.div
           initial={{ opacity: 0, scale: 0.8 }}

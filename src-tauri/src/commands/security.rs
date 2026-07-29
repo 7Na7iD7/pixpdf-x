@@ -3,32 +3,6 @@ use tauri::{command, AppHandle};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
-/// PDF encryption/decryption is delegated to the `qpdf` command-line tool
-/// because there is no mature pure-Rust crate that implements PDF's
-/// standard security handler (RC4/AES + owner/user password + permission
-/// bits) end to end. qpdf is the same engine many PDF tools rely on.
-///
-/// SETUP REQUIRED: install qpdf and make sure it's on PATH:
-///   - Windows: https://qpdf.sourceforge.io/ (installer) or `winget install QPDF.QPDF`
-///   - macOS:   `brew install qpdf`
-///   - Linux:   `apt install qpdf` / `dnf install qpdf` / etc.
-///
-/// Also required — Tauri v2's shell plugin is permission-gated. Add this to
-/// `src-tauri/capabilities/default.json` (create the capabilities section if
-/// you don't have one) so the app is allowed to spawn qpdf:
-///
-/// {
-///   "permissions": [
-///     { "identifier": "shell:allow-execute" }
-///   ]
-/// }
-///
-/// and register an allowed command in your shell plugin scope, e.g. in
-/// `tauri.conf.json` -> "plugins" -> "shell" or via a capability's `scope`
-/// entry naming `"qpdf"` as an allowed binary. Consult the Tauri v2 shell
-/// plugin docs for the exact scope syntax for your Tauri version, since this
-/// changed between 2.0 betas — if `encrypt_pdf`/`decrypt_pdf` fail with a
-/// permission/scope error rather than "qpdf not found", that's the fix needed.
 
 #[command]
 pub async fn encrypt_pdf(
@@ -131,9 +105,7 @@ pub async fn decrypt_pdf(
     }
 
     if exit_code != Some(0) {
-        // qpdf returns a specific, recognizable message for a bad password —
-        // surface that distinctly so the UI can say "wrong password" rather
-        // than a generic failure.
+  
         if stderr_output.to_lowercase().contains("invalid password") {
             return Err(PDFError::DecryptionError("Incorrect password".into()));
         }
