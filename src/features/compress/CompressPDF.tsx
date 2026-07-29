@@ -12,6 +12,7 @@ import {
   Loader2,
   Upload,
   XCircle,
+  AlertTriangle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@components/ui/card";
 import { Button } from "@components/ui/button";
@@ -37,8 +38,7 @@ interface CompressProgress {
 
 const stageLabels: Record<string, string> = {
   analyzing: "Analyzing document…",
-  "recompressing-images": "Recompressing images…",
-  rasterizing: "Rasterizing pages…",
+  compressing: "Compressing pages…",
   finalizing: "Finalizing…",
 };
 
@@ -60,7 +60,7 @@ export function CompressPDF() {
       const payload = event.payload;
       setProgress(payload);
 
-      if (payload.stage === "rasterizing") {
+      if (payload.stage === "compressing") {
         const now = Date.now();
         samplesRef.current.push({ time: now, done: payload.done });
         if (samplesRef.current.length > ETA_SAMPLE_WINDOW) {
@@ -90,7 +90,7 @@ export function CompressPDF() {
   };
 
   const estimateRemaining = (): string | null => {
-    if (!progress || progress.stage !== "rasterizing" || progress.total <= 1) return null;
+    if (!progress || progress.stage !== "compressing" || progress.total <= 1) return null;
     const samples = samplesRef.current;
     if (samples.length < 2) return null;
 
@@ -122,16 +122,7 @@ export function CompressPDF() {
 
     try {
       const res = await compress.mutateAsync({ path: document.path, outputPath, quality: selectedPreset });
-      if (res.rasterized) {
-        addToast({
-          title: "Compressed (converted to images)",
-          description:
-            "This file's scanned pages weren't JPEG, so pages were rasterized and re-compressed. Any selectable text was lost.",
-          variant: "success",
-        });
-      } else {
-        addToast({ title: "Compression complete", description: `Saved to ${outputPath}`, variant: "success" });
-      }
+      addToast({ title: "Compression complete", description: `Saved to ${outputPath}`, variant: "success" });
       addRecentFile({
         path: outputPath,
         name: document.name,
@@ -144,6 +135,12 @@ export function CompressPDF() {
       const message = pdfErrorMessage(err);
       if (message.toLowerCase().includes("cancelled by user")) {
         addToast({ title: "Compression cancelled", variant: "default" });
+      } else if (message.toLowerCase().includes("ghostscript")) {
+        addToast({
+          title: "Ghostscript not found",
+          description: "Install Ghostscript and make sure it's on PATH, then try again.",
+          variant: "destructive",
+        });
       } else {
         addToast({ title: "Compression failed", description: message, variant: "destructive" });
       }
@@ -295,10 +292,20 @@ export function CompressPDF() {
                 </>
               )}
               <p className="text-xs text-muted-foreground pt-2 border-t border-border">
-                {result?.rasterized
-                  ? "This file's images weren't JPEG-based (common for scanned books), so pages were rasterized and re-saved as JPEG. Any selectable text in the original was lost — this only applies to Low/Medium presets."
-                  : "Compresses embedded JPEG images and PDF streams. Non-JPEG scanned formats (CCITTFax/JBIG2) are already near-optimal and won't shrink further without rasterizing."}
+                Powered by Ghostscript — the same engine behind most professional PDF compressors. Images are
+                downsampled to the selected quality; any real selectable text is preserved untouched.
               </p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-amber-500/20 bg-amber-500/5">
+            <CardContent className="py-3 flex items-start gap-2 text-xs text-amber-500">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                Requires Ghostscript installed and on PATH. If compression fails with "Ghostscript not found",
+                install it (Windows: ghostscript.com/releases · macOS: <code>brew install ghostscript</code> ·
+                Linux: <code>apt install ghostscript</code>) and restart the app.
+              </span>
             </CardContent>
           </Card>
 
@@ -318,7 +325,7 @@ export function CompressPDF() {
                 <Progress value={progress?.percent ?? 0} className="h-2" />
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <span>{progress?.percent ?? 0}%</span>
-                  {progress && progress.stage === "rasterizing" && (
+                  {progress && progress.stage === "compressing" && (
                     <span>
                       {progress.done} / {progress.total} pages
                     </span>

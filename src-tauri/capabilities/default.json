@@ -14,6 +14,16 @@
           "name": "qpdf",
           "cmd": "qpdf",
           "args": true
+        },
+        {
+          "name": "gs",
+          "cmd": "gs",
+          "args": true
+        },
+        {
+          "name": "gswin64c",
+          "cmd": "gswin64c",
+          "args": true
         }
       ]
     }
