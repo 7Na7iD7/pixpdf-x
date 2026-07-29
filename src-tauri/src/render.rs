@@ -3,7 +3,7 @@ use image::ImageEncoder;
 use pdfium_render::prelude::*;
 use rayon::prelude::*;
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 thread_local! {
@@ -87,70 +87,86 @@ pub fn render_document_to_images(
     };
     let ext = if format == "jpg" || format == "jpeg" { "jpg" } else { "png" };
 
+    let file_bytes = Arc::new(std::fs::read(path).map_err(PDFError::from)?);
+
     let total_pages = with_pdfium(|pdfium| {
         let document = pdfium
-            .load_pdf_from_file(path, None)
+            .load_pdf_from_byte_slice(&file_bytes, None)
             .map_err(|e| PDFError::InvalidFile(format!("Could not open PDF: {e}")))?;
         Ok(document.pages().len() as usize)
     })?;
 
-    let path = path.to_string();
     let output_dir = output_dir.to_string();
     let format = format.to_string();
+    let worker_count = num_cpus::get().saturating_sub(1).max(1);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(worker_count)
+        .build()
+        .map_err(|e| PDFError::ProcessingError(format!("Could not build thread pool: {e}")))?;
 
-    let num_threads = rayon::current_num_threads().max(1);
-    let chunk_size = ((total_pages + num_threads - 1) / num_threads).max(1);
-
+    let chunk_size = ((total_pages + worker_count - 1) / worker_count).max(1);
     let chunks: Vec<(usize, usize)> = (0..total_pages)
         .step_by(chunk_size)
         .map(|start| (start, (start + chunk_size).min(total_pages)))
         .collect();
 
-    let results: Result<Vec<Vec<(usize, String)>>, PDFError> = chunks
-        .par_iter()
-        .map(|&(start, end)| {
-            with_pdfium(|pdfium| {
-                let document = pdfium
-                    .load_pdf_from_file(&path, None)
-                    .map_err(|e| PDFError::InvalidFile(format!("Could not open PDF for rendering: {e}")))?;
+    let results: Result<Vec<Vec<(usize, String)>>, PDFError> = pool.install(|| {
+        chunks
+            .par_iter()
+            .map(|&(start, end)| {
+                let file_bytes = Arc::clone(&file_bytes);
+                with_pdfium(|pdfium| {
+                    let document = pdfium
+                        .load_pdf_from_byte_slice(&file_bytes, None)
+                        .map_err(|e| PDFError::InvalidFile(format!("Could not open PDF for rendering: {e}")))?;
 
-                let pages = document.pages();
-                let mut chunk_results = Vec::with_capacity(end - start);
+                    let pages = document.pages();
+                    let mut chunk_results = Vec::with_capacity(end - start);
 
-                for index in start..end {
-                    let page = pages
-                        .get(index as u16)
-                        .map_err(|e| PDFError::InvalidPage(format!("Page {index} unavailable: {e}")))?;
+                    for index in start..end {
+                        let page = match pages.get(index as u16) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                log::warn!("Page {index} unavailable, skipping: {e}");
+                                continue;
+                            }
+                        };
 
-                    let target_width = (page.width().value * scale).round().max(1.0) as i32;
-                    let target_height = (page.height().value * scale).round().max(1.0) as i32;
+                        let target_width = (page.width().value * scale).round().max(1.0) as i32;
+                        let target_height = (page.height().value * scale).round().max(1.0) as i32;
 
-                    let render_config = PdfRenderConfig::new()
-                        .set_target_width(target_width)
-                        .set_maximum_height(target_height);
+                        let render_config = PdfRenderConfig::new()
+                            .set_target_width(target_width)
+                            .set_maximum_height(target_height);
 
-                    let bitmap = page
-                        .render_with_config(&render_config)
-                        .map_err(|e| PDFError::ProcessingError(format!("Render failed on page {index}: {e}")))?;
+                        let bitmap = match page.render_with_config(&render_config) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                log::warn!("Render failed on page {index}, skipping: {e}");
+                                continue;
+                            }
+                        };
 
-                    let image = bitmap.as_image();
-                    let file_path = format!(
-                        "{}/page_{:03}.{}",
-                        output_dir.trim_end_matches('/'),
-                        index + 1,
-                        ext
-                    );
-                    image
-                        .save_with_format(&file_path, image_format)
-                        .map_err(|e| PDFError::ProcessingError(format!("Failed saving page {index}: {e}")))?;
+                        let image = bitmap.as_image();
+                        let file_path = format!(
+                            "{}/page_{:03}.{}",
+                            output_dir.trim_end_matches('/'),
+                            index + 1,
+                            ext
+                        );
+                        if let Err(e) = image.save_with_format(&file_path, image_format) {
+                            log::warn!("Failed saving page {index}, skipping: {e}");
+                            continue;
+                        }
 
-                    chunk_results.push((index, file_path));
-                }
+                        chunk_results.push((index, file_path));
+                    }
 
-                Ok(chunk_results)
+                    Ok(chunk_results)
+                })
             })
-        })
-        .collect();
+            .collect()
+    });
 
     let mut flat: Vec<(usize, String)> = results?.into_iter().flatten().collect();
     flat.sort_by_key(|(index, _)| *index);
@@ -162,20 +178,24 @@ pub fn rasterize_and_rebuild_pdf(
     jpeg_quality: u8,
     target_dpi: f32,
 ) -> Result<Vec<u8>, PDFError> {
-    rasterize_and_rebuild_pdf_parallel(path, jpeg_quality, target_dpi, |_, _| {})
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    rasterize_and_rebuild_pdf_parallel(path, jpeg_quality, target_dpi, cancel_flag, |_, _| {})
 }
 
 pub fn rasterize_and_rebuild_pdf_parallel(
     path: &str,
     jpeg_quality: u8,
     target_dpi: f32,
+    cancel_flag: Arc<AtomicBool>,
     on_progress: impl Fn(usize, usize) + Send + Sync + 'static,
 ) -> Result<Vec<u8>, PDFError> {
     use lopdf::{Dictionary, Document, Object, Stream};
 
+    let file_bytes = Arc::new(std::fs::read(path).map_err(PDFError::from)?);
+
     let (total_pages, page_sizes): (usize, Vec<(f32, f32)>) = with_pdfium(|pdfium| {
         let doc = pdfium
-            .load_pdf_from_file(path, None)
+            .load_pdf_from_byte_slice(&file_bytes, None)
             .map_err(|e| PDFError::InvalidFile(format!("Could not open PDF: {e}")))?;
         let pages = doc.pages();
         let sizes: Vec<(f32, f32)> = pages
@@ -190,10 +210,14 @@ pub fn rasterize_and_rebuild_pdf_parallel(
         return Err(PDFError::ProcessingError("Document has no pages".into()));
     }
 
-    let path = path.to_string();
     let scale = target_dpi / 72.0;
-    let num_threads = rayon::current_num_threads().max(1);
-    let chunk_size = ((total_pages + num_threads - 1) / num_threads).max(1);
+    let worker_count = num_cpus::get().saturating_sub(1).max(1);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(worker_count)
+        .build()
+        .map_err(|e| PDFError::ProcessingError(format!("Could not build thread pool: {e}")))?;
+
+    let chunk_size = ((total_pages + worker_count - 1) / worker_count).max(1);
     let progress_counter = Arc::new(AtomicUsize::new(0));
     let on_progress = Arc::new(on_progress);
 
@@ -202,58 +226,83 @@ pub fn rasterize_and_rebuild_pdf_parallel(
         .map(|start| (start, (start + chunk_size).min(total_pages)))
         .collect();
 
-    let results: Result<Vec<Vec<(usize, Vec<u8>, u32, u32)>>, PDFError> = chunks
-        .par_iter()
-        .map(|&(start, end)| {
-            let path = path.clone();
-            let progress_counter = Arc::clone(&progress_counter);
-            let on_progress = Arc::clone(&on_progress);
+    let results: Result<Vec<Vec<(usize, Vec<u8>, u32, u32)>>, PDFError> = pool.install(|| {
+        chunks
+            .par_iter()
+            .map(|&(start, end)| {
+                let file_bytes = Arc::clone(&file_bytes);
+                let progress_counter = Arc::clone(&progress_counter);
+                let on_progress = Arc::clone(&on_progress);
+                let cancel_flag = Arc::clone(&cancel_flag);
 
-            with_pdfium(|pdfium| {
-                let document = pdfium
-                    .load_pdf_from_file(&path, None)
-                    .map_err(|e| PDFError::InvalidFile(format!("Could not open PDF for rasterizing: {e}")))?;
+                with_pdfium(|pdfium| {
+                    let document = pdfium
+                        .load_pdf_from_byte_slice(&file_bytes, None)
+                        .map_err(|e| PDFError::InvalidFile(format!("Could not open PDF for rasterizing: {e}")))?;
 
-                let pages = document.pages();
-                let mut chunk_results = Vec::with_capacity(end - start);
+                    let pages = document.pages();
+                    let mut chunk_results = Vec::with_capacity(end - start);
 
-                for index in start..end {
-                    let page = pages
-                        .get(index as u16)
-                        .map_err(|e| PDFError::InvalidPage(format!("Page {index} unavailable: {e}")))?;
+                    for index in start..end {
+                        if cancel_flag.load(Ordering::SeqCst) {
+                            return Err(PDFError::ProcessingError("Cancelled by user".into()));
+                        }
 
-                    let page_width_pt = page.width().value;
-                    let page_height_pt = page.height().value;
+                        let (page_width_pt, page_height_pt) = page_sizes[index];
 
-                    let render_config = PdfRenderConfig::new()
-                        .set_target_width(((page_width_pt * scale) as i32).max(1))
-                        .set_maximum_height(((page_height_pt * scale) as i32).max(1));
+                        let page = match pages.get(index as u16) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                log::warn!("Page {index} unavailable, using blank placeholder: {e}");
+                                let (buf, w, h) =
+                                    blank_jpeg_placeholder(page_width_pt, page_height_pt, scale, jpeg_quality)?;
+                                chunk_results.push((index, buf, w, h));
+                                let done = progress_counter.fetch_add(1, Ordering::SeqCst) + 1;
+                                on_progress(done, total_pages);
+                                continue;
+                            }
+                        };
 
-                    let bitmap = page
-                        .render_with_config(&render_config)
-                        .map_err(|e| PDFError::ProcessingError(format!("Render failed on page {index}: {e}")))?;
+                        let render_config = PdfRenderConfig::new()
+                            .set_target_width(((page_width_pt * scale) as i32).max(1))
+                            .set_maximum_height(((page_height_pt * scale) as i32).max(1));
 
-                    let rgb = bitmap.as_image().to_rgb8();
-                    let (px_w, px_h) = (rgb.width(), rgb.height());
+                        let (jpeg_buf, px_w, px_h) = match page.render_with_config(&render_config) {
+                            Ok(bitmap) => {
+                                let rgb = bitmap.as_image().to_rgb8();
+                                let (px_w, px_h) = (rgb.width(), rgb.height());
+                                let mut jpeg_buf: Vec<u8> = Vec::new();
+                                let encode_ok = {
+                                    let encoder =
+                                        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_buf, jpeg_quality);
+                                    encoder
+                                        .write_image(&rgb, px_w, px_h, image::ExtendedColorType::Rgb8)
+                                        .is_ok()
+                                };
+                                if encode_ok {
+                                    (jpeg_buf, px_w, px_h)
+                                } else {
+                                    log::warn!("JPEG encode failed on page {index}, using blank placeholder");
+                                    blank_jpeg_placeholder(page_width_pt, page_height_pt, scale, jpeg_quality)?
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("Render failed on page {index}, using blank placeholder: {e}");
+                                blank_jpeg_placeholder(page_width_pt, page_height_pt, scale, jpeg_quality)?
+                            }
+                        };
 
-                    let mut jpeg_buf: Vec<u8> = Vec::new();
-                    {
-                        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_buf, jpeg_quality);
-                        encoder
-                            .write_image(&rgb, px_w, px_h, image::ExtendedColorType::Rgb8)
-                            .map_err(|e| PDFError::ProcessingError(format!("JPEG encode failed on page {index}: {e}")))?;
+                        chunk_results.push((index, jpeg_buf, px_w, px_h));
+
+                        let done = progress_counter.fetch_add(1, Ordering::SeqCst) + 1;
+                        on_progress(done, total_pages);
                     }
 
-                    chunk_results.push((index, jpeg_buf, px_w, px_h));
-
-                    let done = progress_counter.fetch_add(1, Ordering::SeqCst) + 1;
-                    on_progress(done, total_pages);
-                }
-
-                Ok(chunk_results)
+                    Ok(chunk_results)
+                })
             })
-        })
-        .collect();
+            .collect()
+    });
 
     let mut flat: Vec<(usize, Vec<u8>, u32, u32)> = results?.into_iter().flatten().collect();
     flat.sort_by_key(|(index, _, _, _)| *index);
@@ -317,4 +366,23 @@ pub fn rasterize_and_rebuild_pdf_parallel(
     let mut buf = Vec::new();
     new_doc.save_to(&mut buf).map_err(PDFError::from)?;
     Ok(buf)
-}converters.rs
+}
+
+fn blank_jpeg_placeholder(
+    page_width_pt: f32,
+    page_height_pt: f32,
+    scale: f32,
+    jpeg_quality: u8,
+) -> Result<(Vec<u8>, u32, u32), PDFError> {
+    let px_w = ((page_width_pt * scale) as u32).max(1);
+    let px_h = ((page_height_pt * scale) as u32).max(1);
+    let rgb = image::RgbImage::from_pixel(px_w, px_h, image::Rgb([255, 255, 255]));
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, jpeg_quality);
+        encoder
+            .write_image(&rgb, px_w, px_h, image::ExtendedColorType::Rgb8)
+            .map_err(|e| PDFError::ProcessingError(format!("Placeholder JPEG encode failed: {e}")))?;
+    }
+    Ok((buf, px_w, px_h))
+}
