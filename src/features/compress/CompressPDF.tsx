@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import {
   FileText,
   Minimize2,
@@ -10,6 +11,7 @@ import {
   CheckCircle2,
   Loader2,
   Upload,
+  XCircle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@components/ui/card";
 import { Button } from "@components/ui/button";
@@ -40,19 +42,31 @@ const stageLabels: Record<string, string> = {
   finalizing: "Finalizing…",
 };
 
+const ETA_SAMPLE_WINDOW = 5;
+
 export function CompressPDF() {
   const [document, setDocument] = useState<PDFDocument | null>(null);
   const [selectedPreset, setSelectedPreset] = useState<"low" | "medium" | "high">("medium");
   const [isLoadingFile, setIsLoadingFile] = useState(false);
   const [progress, setProgress] = useState<CompressProgress | null>(null);
-  const startTimeRef = useRef<number | null>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const samplesRef = useRef<{ time: number; done: number }[]>([]);
   const compress = useCompressPDF();
   const addToast = useAppStore((s) => s.addToast);
   const addRecentFile = useAppStore((s) => s.addRecentFile);
 
   useEffect(() => {
     const unlistenPromise = listen<CompressProgress>("compress-progress", (event) => {
-      setProgress(event.payload);
+      const payload = event.payload;
+      setProgress(payload);
+
+      if (payload.stage === "rasterizing") {
+        const now = Date.now();
+        samplesRef.current.push({ time: now, done: payload.done });
+        if (samplesRef.current.length > ETA_SAMPLE_WINDOW) {
+          samplesRef.current.shift();
+        }
+      }
     });
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
@@ -76,12 +90,21 @@ export function CompressPDF() {
   };
 
   const estimateRemaining = (): string | null => {
-    if (!progress || progress.total <= 1 || progress.done === 0 || !startTimeRef.current) return null;
-    const elapsedMs = Date.now() - startTimeRef.current;
-    const perPageMs = elapsedMs / progress.done;
+    if (!progress || progress.stage !== "rasterizing" || progress.total <= 1) return null;
+    const samples = samplesRef.current;
+    if (samples.length < 2) return null;
+
+    const first = samples[0];
+    const last = samples[samples.length - 1];
+    const elapsedMs = last.time - first.time;
+    const pagesInWindow = last.done - first.done;
+    if (elapsedMs <= 0 || pagesInWindow <= 0) return null;
+
+    const perPageMs = elapsedMs / pagesInWindow;
     const remainingPages = progress.total - progress.done;
     const remainingMs = perPageMs * remainingPages;
     const remainingSec = Math.round(remainingMs / 1000);
+
     if (remainingSec < 60) return `~${remainingSec}s remaining`;
     const min = Math.floor(remainingSec / 60);
     const sec = remainingSec % 60;
@@ -93,8 +116,9 @@ export function CompressPDF() {
     const outputPath = await pickSavePath(`compressed-${document.name}`);
     if (!outputPath) return;
 
+    samplesRef.current = [];
     setProgress({ stage: "analyzing", done: 0, total: 1, percent: 0 });
-    startTimeRef.current = Date.now();
+    setIsCancelling(false);
 
     try {
       const res = await compress.mutateAsync({ path: document.path, outputPath, quality: selectedPreset });
@@ -117,9 +141,23 @@ export function CompressPDF() {
         action: "Compressed",
       });
     } catch (err) {
-      addToast({ title: "Compression failed", description: pdfErrorMessage(err), variant: "destructive" });
+      const message = pdfErrorMessage(err);
+      if (message.toLowerCase().includes("cancelled by user")) {
+        addToast({ title: "Compression cancelled", variant: "default" });
+      } else {
+        addToast({ title: "Compression failed", description: message, variant: "destructive" });
+      }
     } finally {
-      startTimeRef.current = null;
+      setIsCancelling(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    setIsCancelling(true);
+    try {
+      await invoke("cancel_compress");
+    } catch {
+      // best-effort — the operation will still fail on its own if this doesn't land
     }
   };
 
@@ -270,7 +308,11 @@ export function CompressPDF() {
                 <div className="flex items-center gap-2">
                   <Loader2 className="w-4 h-4 animate-spin text-rose-400" />
                   <span className="text-sm font-medium">
-                    {progress ? stageLabels[progress.stage] || "Processing…" : "Processing…"}
+                    {isCancelling
+                      ? "Cancelling…"
+                      : progress
+                      ? stageLabels[progress.stage] || "Processing…"
+                      : "Processing…"}
                   </span>
                 </div>
                 <Progress value={progress?.percent ?? 0} className="h-2" />
@@ -282,7 +324,17 @@ export function CompressPDF() {
                     </span>
                   )}
                 </div>
-                {eta && <p className="text-xs text-muted-foreground">{eta}</p>}
+                {eta && !isCancelling && <p className="text-xs text-muted-foreground">{eta}</p>}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full gap-2 text-destructive hover:text-destructive"
+                  disabled={isCancelling}
+                  onClick={handleCancel}
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                  Cancel
+                </Button>
               </CardContent>
             </Card>
           )}

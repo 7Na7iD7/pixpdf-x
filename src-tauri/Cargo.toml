@@ -4,7 +4,7 @@ version = "1.0.0"
 description = "PixPDF X - Next Generation PDF Studio by NAVIKI Labs"
 authors = ["NAVIKI Labs"]
 license = "Proprietary"
-edition = "2026"
+edition = "2021"
 rust-version = "1.75"
 
 [build-dependencies]
@@ -23,13 +23,12 @@ anyhow = "1.0"
 lopdf = { version = "0.34", features = ["embed_image"] }
 image = "0.25"
 rayon = "1.10"
+num_cpus = "1.16"
 uuid = { version = "1.10", features = ["v4"] }
 chrono = "0.4"
 log = "0.4"
 env_logger = "0.11"
 base64 = "0.22"
-# Real PDF page rasterization (used by render_page / PNG-JPG export).
-# Requires a pdfium dynamic library at runtime — see src/render.rs doc comment.
 pdfium-render = { version = "0.8", features = ["thread_safe"] }
 
 [features]

@@ -12,8 +12,9 @@ mod utils;
 mod workers;
 
 use commands::{
-    compress_pdf, convert_pdf, decrypt_pdf, delete_pages, encrypt_pdf, get_pdf_metadata,
-    get_pdf_pages, merge_pdfs, open_pdf, render_page, rotate_pages, split_pdf,
+    cancel_compress, compress_pdf, convert_pdf, decrypt_pdf, delete_pages, encrypt_pdf,
+    get_pdf_metadata, get_pdf_pages, merge_pdfs, open_pdf, render_page, rotate_pages, split_pdf,
+    CompressState,
 };
 use filesystem::{pick_file, pick_files, pick_folder, pick_save_path, read_file_info};
 
@@ -24,6 +25,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .manage(CompressState::default())
         .invoke_handler(tauri::generate_handler![
             open_pdf,
             get_pdf_metadata,
@@ -32,6 +34,7 @@ fn main() {
             merge_pdfs,
             split_pdf,
             compress_pdf,
+            cancel_compress,
             convert_pdf,
             encrypt_pdf,
             decrypt_pdf,

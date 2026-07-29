@@ -2,9 +2,16 @@ use lopdf::{Dictionary, Document, Object, ObjectId};
 use image::ImageEncoder;
 use serde::Serialize;
 use std::path::Path;
-use tauri::{command, AppHandle, Emitter};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tauri::{command, AppHandle, Emitter, State};
 
 use crate::utils::errors::PDFError;
+
+#[derive(Default)]
+pub struct CompressState {
+    pub cancel_flag: Arc<AtomicBool>,
+}
 
 #[derive(Serialize)]
 pub struct CompressResult {
@@ -23,12 +30,21 @@ pub struct CompressProgress {
 }
 
 #[command]
+pub fn cancel_compress(state: State<'_, CompressState>) {
+    state.cancel_flag.store(true, Ordering::SeqCst);
+}
+
+#[command]
 pub async fn compress_pdf(
     app: AppHandle,
+    state: State<'_, CompressState>,
     path: String,
     output_path: String,
     quality: String,
 ) -> Result<CompressResult, PDFError> {
+    state.cancel_flag.store(false, Ordering::SeqCst);
+    let cancel_flag = Arc::clone(&state.cancel_flag);
+
     let path_clone = path.clone();
     let quality_clone = quality.clone();
     let app_clone = app.clone();
@@ -75,11 +91,13 @@ pub async fn compress_pdf(
             if !stream_recompress_saved_enough && (quality_clone == "low" || quality_clone == "medium") {
                 let path_for_raster = path_clone.clone();
                 let app_for_progress = app_clone.clone();
+                let cancel_flag_for_raster = Arc::clone(&cancel_flag);
 
                 let raster_bytes = crate::render::rasterize_and_rebuild_pdf_parallel(
                     &path_for_raster,
                     jpeg_quality,
                     target_dpi,
+                    cancel_flag_for_raster,
                     move |done, total| {
                         let percent = 10 + ((done as f64 / total as f64) * 85.0) as u8;
                         let _ = app_for_progress.emit(
