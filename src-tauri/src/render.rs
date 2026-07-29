@@ -317,4 +317,4 @@ pub fn rasterize_and_rebuild_pdf_parallel(
     let mut buf = Vec::new();
     new_doc.save_to(&mut buf).map_err(PDFError::from)?;
     Ok(buf)
-}
+}converters.rs
